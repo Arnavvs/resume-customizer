@@ -2,8 +2,10 @@
 
 Paste a job description, upload your resume (PDF or DOCX), and get back a version tailored to that job. The summary is rewritten, the most relevant bullets come first, and the JD's terminology is used, without inventing experience. You also get a keyword-match and ATS score, a diff of every change, gap suggestions, a streamed cover letter, and PDF / DOCX / TXT downloads.
 
-- **Live app:** _<add Vercel URL>_
-- **API:** _<add Render URL>_ (`/api/health`, interactive docs at `/docs`)
+- **Live app:** https://resume-customizer-gamma-topaz.vercel.app
+- **API:** https://resume-customizer-api-8zoe.onrender.com (`/api/health`, interactive docs at [`/docs`](https://resume-customizer-api-8zoe.onrender.com/docs))
+
+> The API runs on Render's free plan and sleeps when idle, so the first request after a while can take ~50 s to wake it.
 
 > No resume handy? Click **"Try it with a sample JD + resume"** at the top of the form.
 
@@ -46,7 +48,7 @@ Paste a job description, upload your resume (PDF or DOCX), and get back a versio
 
 **Google Gemini (Google AI Studio API).** The primary model is **`gemini-3.5-flash`**, with automatic fallback to **`gemini-3.8-flash`** and then **`gemini-2.5-flash`**. All three are configurable with environment variables.
 
-Why Flash models: tailoring is a structured rewrite task, not deep reasoning. Flash models give high-quality output in roughly 10–30 s on the free tier. The fallback chain exists because free-tier models regularly return `503 overloaded`. When that happens, the request moves to the next model instead of failing.
+Why Flash models with **low thinking**: tailoring is a structured rewrite task, not deep reasoning. With the default thinking setting, tailoring took 25–55 s. With thinking set to `low` (3.x) or a small token budget (2.x), it takes about 8–15 s with the same output quality, and parsing takes 3–7 s. The fallback chain exists because free-tier models regularly return `503 overloaded`. When that happens, the request moves to the next model instead of failing. Each attempt also has its own timeout, so a hung model costs seconds, not minutes. `gemini-2.5-flash` is last in the chain because, in testing, it followed the no-invented-outcomes rule less reliably than the 3.x models.
 
 ## Architecture
 
@@ -177,4 +179,4 @@ Open http://localhost:3000.
 - **No authentication or server-side history.** Versions and cover letters persist in the browser (localStorage) instead. That keeps the backend stateless and free of PII, but history doesn't follow you across devices.
 - **The rate limiter is in-memory** and per instance. That's fine for a single free-tier instance; Redis would be needed at scale.
 - **Free-tier cold starts:** Render's free plan sleeps when idle, so the first request after a while can take ~30–50 s. The UI explains this if the server can't be reached.
-- **LLM latency:** tailoring takes ~15–40 s depending on model load. The UI shows staged progress, and the cover letter is streamed.
+- **LLM latency:** tailoring takes ~10–40 s depending on Gemini's free-tier load. The UI shows staged progress, and the cover letter is streamed.
