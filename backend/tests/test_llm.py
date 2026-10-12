@@ -54,6 +54,12 @@ def test_transient_error_retries_same_model(fake, sample_resume):
     assert models.calls == ["primary", "primary"]
 
 
+def test_timeout_skips_to_next_model(fake, sample_resume):
+    models = fake({"primary": [TimeoutError()], "backup": [sample_resume]})
+    asyncio.run(llm.structure_resume("text"))
+    assert models.calls == ["primary", "backup"]
+
+
 def test_bad_api_key_fails_fast_with_friendly_message(fake):
     models = fake({"primary": [api_error(403)], "backup": []})
     with pytest.raises(llm.LLMError, match="API key"):
