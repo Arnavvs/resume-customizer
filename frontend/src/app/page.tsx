@@ -2,6 +2,7 @@
 
 import { Briefcase, FileSearch, FileText, GitCompare, Loader2, PenLine, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AgentConnect } from "@/components/AgentConnect";
 import { CompareView } from "@/components/CompareView";
 import { CoverLetter } from "@/components/CoverLetter";
 import { DiffView } from "@/components/DiffView";
@@ -12,7 +13,8 @@ import { ResumeUpload, validateFile } from "@/components/ResumeUpload";
 import { ResumeView } from "@/components/ResumeView";
 import { ALL_SECTIONS, TailorOptions } from "@/components/TailorOptions";
 import { Button, Card, Chip, ErrorMessage } from "@/components/ui";
-import { ApiError, parseResume, tailorResume } from "@/lib/api";
+import { ApiError, parseResume, parseResumeText, tailorResume } from "@/lib/api";
+import { describeVersion, registerWebMcpTools, type WebMcpTool } from "@/lib/webmcp";
 import type { Intensity, PageTarget, ParsedResume, ResumeVersion, Section } from "@/lib/types";
 import { cn, storage } from "@/lib/utils";
 
@@ -156,6 +158,37 @@ export default function Home() {
   const jdInvalid = jdError(jd);
   const canSubmit = !jdInvalid && !!parsed && sections.length > 0 && !tailoring && !parsing;
 
+  /** Tailors and adds a new version. Shared by the button and the WebMCP tool; throws ApiError. */
+  const runTailor = async (input: {
+    jobDescription: string;
+    parsed: ParsedResume;
+    intensity: Intensity;
+    pageTarget: PageTarget;
+  }): Promise<ResumeVersion> => {
+    setTailoring(true);
+    try {
+      // Score new versions of the same JD against the same keyword list so they're comparable.
+      const sameJd = versions.find((v) => v.jobDescription === input.jobDescription);
+      const result = await tailorResume({ ...input, sections, jdKeywords: sameJd?.jd_keywords });
+      const version: ResumeVersion = {
+        ...result,
+        id: crypto.randomUUID(),
+        label: versionLabel(versions.length + 1, input.intensity, result.sections, result.page_target),
+        createdAt: Date.now(),
+        jobDescription: input.jobDescription,
+      };
+      setVersions((v) => [...v, version]);
+      setActiveId(version.id);
+      // Keep WebMCP's view current before React re-renders (an agent may read it right away).
+      latest.current = { ...latest.current, versions: [...latest.current.versions, version], activeId: version.id };
+      setTab("resume");
+      requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      return version;
+    } finally {
+      setTailoring(false);
+    }
+  };
+
   const handleTailor = async () => {
     setSubmitted(true);
     setError(null);
@@ -165,37 +198,80 @@ export default function Home() {
       return;
     }
     if (!sections.length) return;
-
-    setTailoring(true);
     try {
-      const jobDescription = jd.trim();
-      // Score new versions of the same JD against the same keyword list so they're comparable.
-      const sameJd = versions.find((v) => v.jobDescription === jobDescription);
-      const result = await tailorResume({
-        jobDescription,
-        parsed,
-        sections,
-        intensity,
-        pageTarget,
-        jdKeywords: sameJd?.jd_keywords,
-      });
-      const version: ResumeVersion = {
-        ...result,
-        id: crypto.randomUUID(),
-        label: versionLabel(versions.length + 1, intensity, result.sections, result.page_target),
-        createdAt: Date.now(),
-        jobDescription,
-      };
-      setVersions((v) => [...v, version]);
-      setActiveId(version.id);
-      setTab("resume");
-      requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      await runTailor({ jobDescription: jd.trim(), parsed, intensity, pageTarget });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Something went wrong while tailoring. Please try again.");
-    } finally {
-      setTailoring(false);
     }
   };
+
+  // --- WebMCP: expose the page's main actions to in-browser AI agents -------------------------
+  const [webMcpActive, setWebMcpActive] = useState(false);
+  const latest = useRef({ runTailor, parsed, intensity, pageTarget, versions, activeId });
+  latest.current = { runTailor, parsed, intensity, pageTarget, versions, activeId };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const tools: WebMcpTool[] = [
+      {
+        name: "tailor_resume",
+        description:
+          "Tailor the user's resume to a job description on this page (never invents experience). Uses " +
+          "resume_text if given, otherwise the resume already uploaded on the page. Shows the result " +
+          "to the user and returns it with keyword-match/ATS scores and honest gap suggestions.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            job_description: { type: "string", description: "Full job posting text (min 100 characters)" },
+            resume_text: { type: "string", description: "Resume as plain text (optional if one is uploaded)" },
+            page_target: { type: "string", enum: ["one", "two", "auto"], description: "Resume length" },
+            intensity: { type: "string", enum: ["conservative", "balanced", "bold"] },
+          },
+          required: ["job_description"],
+        },
+        execute: async (args) => {
+          const s = latest.current;
+          const jobDescription = String(args.job_description ?? "").trim();
+          const invalid = jdError(jobDescription);
+          if (invalid) return `Error: ${invalid}`;
+          try {
+            let resume = s.parsed;
+            if (typeof args.resume_text === "string" && args.resume_text.trim()) {
+              resume = await parseResumeText(args.resume_text);
+              setParsed(resume);
+              setFile({ name: "Resume from AI assistant", size: resume.size_bytes });
+            }
+            if (!resume) return "Error: no resume on the page. Pass resume_text, or ask the user to upload one.";
+            setJd(jobDescription);
+            const version = await s.runTailor({
+              jobDescription,
+              parsed: resume,
+              intensity: (args.intensity as Intensity) ?? s.intensity,
+              pageTarget: (args.page_target as PageTarget) ?? s.pageTarget,
+            });
+            return describeVersion(version);
+          } catch (e) {
+            return `Error: ${e instanceof ApiError ? e.message : "tailoring failed, please retry."}`;
+          }
+        },
+      },
+      {
+        name: "get_tailored_resume",
+        description: "Return the tailored resume currently shown on the page, with its scores and gaps.",
+        inputSchema: { type: "object", properties: {} },
+        annotations: { readOnlyHint: true },
+        execute: async () => {
+          const { versions: vs, activeId: id } = latest.current;
+          const current = vs.find((v) => v.id === id) ?? vs[vs.length - 1];
+          return current ? describeVersion(current) : "No tailored resume yet. Call tailor_resume first.";
+        },
+      },
+    ];
+    registerWebMcpTools(tools, controller.signal).then((ok) => {
+      if (!controller.signal.aborted) setWebMcpActive(ok);
+    });
+    return () => controller.abort();
+  }, []);
 
   const resetAll = () => {
     setVersions([]);
@@ -216,7 +292,10 @@ export default function Home() {
             </div>
             <span className="font-semibold tracking-tight text-slate-900">Resume Customizer</span>
           </div>
-          <span className="hidden text-xs text-slate-500 sm:block">Tailor your resume to any job · powered by Gemini</span>
+          <div className="flex items-center gap-3">
+            <span className="hidden text-xs text-slate-500 md:block">Tailor your resume to any job · powered by Gemini</span>
+            <AgentConnect webMcpActive={webMcpActive} />
+          </div>
         </div>
       </header>
 

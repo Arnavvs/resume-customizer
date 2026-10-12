@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import llm, main
+from app import llm, main, ratelimit
 from app.schemas import MissingKeyword, TailorOutput
 
 from .test_parsing import RESUME_LINES, make_docx
@@ -16,7 +16,7 @@ JD = (
 
 @pytest.fixture
 def client(monkeypatch, sample_resume):
-    main._hits.clear()
+    ratelimit.reset()
 
     async def fake_structure(text, links):
         return sample_resume

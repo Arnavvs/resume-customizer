@@ -8,6 +8,8 @@ Paste a job description, upload your resume (PDF or DOCX), and get back a versio
 > The API runs on Render's free plan and sleeps when idle, so the first request after a while can take ~50 s to wake it.
 
 > No resume handy? Click **"Try it with a sample JD + resume"** at the top of the form.
+>
+> Reviewing with an AI agent? The backend is also a **remote MCP server**. See [Use it from AI agents](#use-it-from-ai-agents-mcp).
 
 ---
 
@@ -35,6 +37,35 @@ Paste a job description, upload your resume (PDF or DOCX), and get back a versio
 - ✅ Session persistence: your JD, parsed resume, versions and cover letters survive a refresh (localStorage).
 - ❌ Authentication: skipped to keep the app stateless (see trade-offs).
 
+## Use it from AI agents (MCP)
+
+The same backend serves a remote **Model Context Protocol** server at
+`https://resume-customizer-api-8zoe.onrender.com/mcp` (Streamable HTTP, stateless, no auth). Any MCP client can use the app directly: no install, no API key.
+
+```bash
+# Claude Code
+claude mcp add --transport http resume-customizer https://resume-customizer-api-8zoe.onrender.com/mcp
+# Codex CLI
+codex mcp add resume-customizer --url https://resume-customizer-api-8zoe.onrender.com/mcp
+```
+
+- **claude.ai / Claude Desktop:** Settings → Connectors → *Add custom connector* → paste the URL.
+- **Cursor, VS Code and others:** `{"mcpServers": {"resume-customizer": {"url": "https://resume-customizer-api-8zoe.onrender.com/mcp"}}}`.
+- The web app's **Connect AI agent** button shows the same setup with copy buttons.
+
+Then ask, for example: *"Tailor my resume (attached) to this job description, one page, and give me the PDF."*
+
+| Tool | What it does |
+| --- | --- |
+| `tailor_resume` | Takes the JD plus the resume, as text or as the original PDF/DOCX in base64 (which keeps hyperlinks). Returns the tailored resume as markdown, before/after scores, the change log, honest gap suggestions, and PDF/DOCX download links. |
+| `write_cover_letter` | Writes a cover letter grounded in the resume's facts. |
+| `export_resume` | Renders an edited structured resume to PDF/DOCX and returns a download link. No LLM call. |
+| `run_sample_demo` | Runs an end-to-end check with bundled sample data, for reviewers who don't want to share a resume. |
+
+The tools call the same service layer as the REST API ([`service.py`](backend/app/service.py)). Truthfulness guards, page fitting and rate limits are identical to the web app. Tool failures come back as MCP tool errors with readable messages (bad input, quota, overload), not crashes. Download links come from a small in-memory store and expire after an hour.
+
+**WebMCP (in-browser agents).** The frontend also registers `tailor_resume` and `get_tailored_resume` through the experimental [WebMCP API](https://developer.chrome.com/docs/ai/webmcp/imperative-api) (`document.modelContext.registerTool`). A browser agent can then tailor a resume on the page itself, and the user watches the result appear. This is feature-detected and does nothing in browsers without WebMCP.
+
 ## Tech stack
 
 | Layer | Tech |
@@ -43,7 +74,8 @@ Paste a job description, upload your resume (PDF or DOCX), and get back a versio
 | Backend | Python 3.12, FastAPI, Pydantic v2, pdfplumber, python-docx, fpdf2 |
 | LLM | Google Gemini via the official `google-genai` SDK |
 | Hosting | Vercel (frontend), Render (backend, Docker) |
-| Tests | pytest (backend: parsing, link extraction, export/fit-to-page, scoring, API, LLM fallback; 48 tests) |
+| Agents | Remote MCP server via the official `mcp` Python SDK, and WebMCP in the frontend |
+| Tests | pytest (backend: parsing, link extraction, export/fit-to-page, scoring, API, MCP protocol, LLM fallback; 58 tests) |
 
 ### LLM provider and model
 
@@ -163,6 +195,8 @@ Open http://localhost:3000.
 | `MAX_UPLOAD_MB` | backend | `5` | Upload size limit |
 | `RATE_LIMIT_PER_HOUR` | backend | `60` | Per-IP limit on LLM endpoints |
 | `LLM_TIMEOUT_SECONDS` | backend | `120` | Per-request LLM timeout |
+| `PUBLIC_API_URL` | backend | from request | Base URL for download links returned by MCP tools |
+| `MCP_ALLOWED_HOSTS` | backend | – | Optional Host allow-list for `/mcp` (turns on DNS-rebinding protection) |
 | `NEXT_PUBLIC_API_URL` | frontend | `http://localhost:8000` | Backend base URL |
 
 ## Deployment

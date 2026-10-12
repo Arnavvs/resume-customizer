@@ -18,3 +18,5 @@ services:
         sync: false # e.g. https://your-app.vercel.app
       - key: ALLOWED_ORIGIN_REGEX
         sync: false
+      - key: PUBLIC_API_URL
+        value: https://resume-customizer-api-8zoe.onrender.com

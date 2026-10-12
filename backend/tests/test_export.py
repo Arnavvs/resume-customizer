@@ -1,7 +1,7 @@
 import pytest
 
 from app import export, parsing
-from app.main import enforce_invariants
+from app.service import enforce_invariants
 from app.schemas import ContactItem, ExperienceItem, ProjectItem
 
 

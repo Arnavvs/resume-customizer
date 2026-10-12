@@ -1,0 +1,24 @@
+Backend Engineer (Python) — Finlytics, Bengaluru (Hybrid)
+
+About us
+Finlytics builds real-time spend analytics for 2,000+ mid-market companies. Our platform processes millions of transactions a day.
+
+What you'll do
+- Design, build and maintain scalable REST APIs and microservices in Python (FastAPI)
+- Build event-driven data pipelines using Kafka and process high-volume transaction data
+- Model data and write performant queries in PostgreSQL; use Redis for caching
+- Containerize services with Docker and deploy them to Kubernetes on AWS
+- Own CI/CD pipelines (GitHub Actions) and write automated tests (pytest)
+- Collaborate with product and frontend teams, review code and mentor junior engineers
+
+Requirements
+- 2+ years of professional backend development experience with Python
+- Strong experience with REST API design, PostgreSQL and SQL query optimization
+- Hands-on experience with Docker; exposure to Kubernetes
+- Familiarity with AWS (EC2, S3, Lambda) or another major cloud provider
+- Experience with automated testing and CI/CD
+
+Nice to have
+- Kafka or other message queues
+- Experience in fintech or payments
+- Monitoring with Prometheus / Grafana

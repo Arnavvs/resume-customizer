@@ -79,6 +79,45 @@ def resume_to_text(resume: Resume) -> str:
     return "\n".join(lines).strip()
 
 
+def resume_to_markdown(resume: Resume) -> str:
+    """Markdown rendering for chat clients (MCP tool results)."""
+
+    def link(text: str, url: str) -> str:
+        return f"[{text}]({url})" if url else text
+
+    lines: list[str] = [f"# {resume.name}"]
+    if resume.headline:
+        lines.append(f"**{resume.headline}**")
+    if resume.contact:
+        lines.append(" · ".join(link(c.text, c.url) for c in resume.contact))
+    if resume.summary:
+        lines += ["", "## Summary", resume.summary]
+    if resume.skills:
+        lines += ["", "## Skills"]
+        lines += [f"- **{g.category}:** {', '.join(g.skills)}" if g.category else f"- {', '.join(g.skills)}" for g in resume.skills]
+    if resume.experience:
+        lines += ["", "## Experience"]
+        for job in resume.experience:
+            meta = " | ".join(p for p in (job.location, job.dates) if p)
+            lines += ["", f"**{job.title}** · {job.company}{f'  _({meta})_' if meta else ''}"]
+            lines += [f"- {b}" for b in job.bullets]
+    if resume.projects:
+        lines += ["", "## Projects"]
+        for proj in resume.projects:
+            lines += ["", f"**{link(proj.name, proj.url)}**{f' · _{proj.details}_' if proj.details else ''}"]
+            lines += [f"- {b}" for b in proj.bullets]
+    if resume.education:
+        lines += ["", "## Education"]
+        for edu in resume.education:
+            lines.append(f"- **{edu.degree}**, {edu.institution}{f' ({edu.dates})' if edu.dates else ''}")
+            if edu.details:
+                lines.append(f"  {edu.details}")
+    for section in resume.extra_sections:
+        lines += ["", f"## {section.title}"]
+        lines += [f"- {item}" for item in section.items]
+    return "\n".join(lines).strip()
+
+
 # ---------------------------------------------------------------------------
 # Keyword match
 # ---------------------------------------------------------------------------

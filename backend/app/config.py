@@ -33,6 +33,10 @@ class Settings:
     allowed_origin_regex: str | None = field(default_factory=lambda: os.getenv("ALLOWED_ORIGIN_REGEX") or None)
     max_upload_mb: float = field(default_factory=lambda: float(os.getenv("MAX_UPLOAD_MB", "5")))
     rate_limit_per_hour: int = field(default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_HOUR", "60")))
+    # Base URL used in download links returned by MCP tools; derived from the request if unset.
+    public_api_url: str = field(default_factory=lambda: os.getenv("PUBLIC_API_URL", "").rstrip("/"))
+    # Optional Host-header allow-list for the MCP endpoint (enables DNS-rebinding protection).
+    mcp_allowed_hosts: list[str] = field(default_factory=lambda: _csv(os.getenv("MCP_ALLOWED_HOSTS", "")))
 
     @property
     def model_chain(self) -> list[str]:

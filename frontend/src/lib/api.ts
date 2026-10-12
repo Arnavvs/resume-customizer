@@ -42,6 +42,13 @@ export async function parseResume(file: File, signal?: AbortSignal): Promise<Par
   return res.json();
 }
 
+export async function parseResumeText(text: string): Promise<ParsedResume> {
+  const res = await request("/api/resume/parse-text", json({ text }));
+  return res.json();
+}
+
+export const MCP_URL = `${API_URL}/mcp`;
+
 export async function tailorResume(params: {
   jobDescription: string;
   parsed: ParsedResume;

@@ -1,35 +1,53 @@
-"""FastAPI application: resume parsing, LLM tailoring, cover letters, and file export."""
+"""FastAPI application: REST API for the web app, plus the MCP endpoint for AI agents."""
 
 import logging
-import re
-import time
-from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from starlette.concurrency import run_in_threadpool
+from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import BaseModel, Field
 
-from . import export, llm, parsing, scoring
+from . import downloads, llm, parsing, ratelimit, service
 from .config import get_settings
+from .mcp_server import mcp
 from .schemas import (
     JD_MAX_CHARS,
     JD_MIN_CHARS,
     CoverLetterRequest,
     ExportRequest,
     ParseResponse,
-    Resume,
-    Scores,
     TailorRequest,
     TailorResponse,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger(__name__)
 settings = get_settings()
 
-app = FastAPI(title="Resume Customizer API", version="1.0.0")
+# Streamable HTTP MCP endpoint at /mcp. Stateless + JSON responses: every tool call is a single
+# request/response, which works behind proxies and on a free instance that may restart. DNS
+# rebinding protection targets servers on a user's own machine; this one is public and sends no
+# credentials, so it is off unless MCP_ALLOWED_HOSTS pins the Host header.
+mcp_app = mcp.streamable_http_app(
+    streamable_http_path="/mcp",
+    stateless_http=True,
+    json_response=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=bool(settings.mcp_allowed_hosts),
+        allowed_hosts=settings.mcp_allowed_hosts,
+    ),
+)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    async with mcp.session_manager.run():
+        yield
+
+
+app = FastAPI(title="Resume Customizer API", version="1.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
@@ -38,6 +56,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition", "X-Page-Count"],
 )
+app.router.routes.extend(mcp_app.routes)
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +74,11 @@ async def llm_error_handler(_: Request, exc: llm.LLMError) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
 
+@app.exception_handler(parsing.ResumeParseError)
+async def parse_error_handler(_: Request, exc: parsing.ResumeParseError) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
     for error in exc.errors():
@@ -66,23 +90,11 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
     return JSONResponse(status_code=422, content={"detail": f"Invalid request: {where} {first.get('msg', '')}".strip()})
 
 
-# ---------------------------------------------------------------------------
-# Simple in-memory rate limit for endpoints that spend LLM quota
-# ---------------------------------------------------------------------------
-
-_hits: dict[str, deque[float]] = defaultdict(deque)
-
-
 def rate_limit(request: Request) -> None:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    ip = forwarded.split(",")[0].strip() or (request.client.host if request.client else "unknown")
-    now, window = time.monotonic(), 3600
-    hits = _hits[ip]
-    while hits and now - hits[0] > window:
-        hits.popleft()
-    if len(hits) >= settings.rate_limit_per_hour:
-        raise HTTPException(429, "You've hit the hourly request limit for this demo. Please try again later.")
-    hits.append(now)
+    try:
+        ratelimit.check(ratelimit.client_ip(request))
+    except ratelimit.RateLimitExceeded as exc:
+        raise HTTPException(429, str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +105,6 @@ def rate_limit(request: Request) -> None:
 @app.get("/api/health")
 async def health() -> dict:
     return {"status": "ok", "model": settings.gemini_model, "llm_configured": bool(settings.gemini_api_key)}
-
 
 
 @app.post("/api/resume/parse", response_model=ParseResponse, dependencies=[Depends(rate_limit)])
@@ -107,105 +118,21 @@ async def parse_resume(file: UploadFile = File(...)) -> ParseResponse:
         raise HTTPException(413, f"File is too large. The maximum size is {settings.max_upload_mb:g} MB.")
     if not data:
         raise HTTPException(400, "The uploaded file is empty.")
+    return await service.parse_file(filename, data)
 
-    try:
-        extracted = parsing.extract(filename, data)
-    except parsing.ResumeParseError as exc:
-        raise HTTPException(422, str(exc)) from exc
 
-    resume = await llm.structure_resume(extracted.text, extracted.links)
-    for item in resume.contact:  # emails, phones and bare domains become links even without a hyperlink
-        item.url = export.contact_url(item)
-    return ParseResponse(filename=filename, size_bytes=len(data), text=extracted.text, resume=resume)
+class ParseTextRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=60_000)
+
+
+@app.post("/api/resume/parse-text", response_model=ParseResponse, dependencies=[Depends(rate_limit)])
+async def parse_resume_text(req: ParseTextRequest) -> ParseResponse:
+    return await service.parse_text(req.text)
 
 
 @app.post("/api/resume/tailor", response_model=TailorResponse, dependencies=[Depends(rate_limit)])
 async def tailor_resume(req: TailorRequest) -> TailorResponse:
-    sections = list(dict.fromkeys(req.sections))
-    output = await llm.tailor_resume(req.job_description, req.resume, sections, req.intensity, req.page_target)
-    tailored = enforce_invariants(req.resume, output.resume, sections)
-    tailored, pages = await fit_to_page_target(req, tailored, sections)
-
-    keywords = req.jd_keywords or output.jd_keywords
-    tailored_text = scoring.resume_to_text(tailored)
-    match_before = scoring.keyword_match(req.resume_text, keywords)
-    match_after = scoring.keyword_match(tailored_text, keywords)
-
-    return TailorResponse(
-        target_role=output.target_role,
-        jd_keywords=keywords,
-        resume=tailored,
-        matched_skills=output.matched_skills,
-        # Only report gaps that really are absent from the tailored resume.
-        missing_keywords=[k for k in output.missing_keywords if not scoring.contains_keyword(tailored_text, k.keyword)],
-        change_log=output.change_log,
-        sections=sections,
-        intensity=req.intensity,
-        page_target=req.page_target,
-        page_count=pages,
-        scores=Scores(
-            match_before=match_before,
-            match_after=match_after,
-            ats_before=scoring.ats_report(req.resume, match_before),
-            ats_after=scoring.ats_report(tailored, match_after),
-        ),
-    )
-
-
-async def fit_to_page_target(req: TailorRequest, tailored: Resume, sections: list[str]) -> tuple[Resume, int]:
-    """Render the PDF; if it still overflows the requested page count even at the tightest layout,
-    ask the LLM once to condense by relevance. A failed condense keeps the longer version."""
-    pages = await run_in_threadpool(export.page_count, tailored, req.page_target)
-    target = export.PAGE_TARGETS.get(req.page_target)
-    if target is None or pages <= target:
-        return tailored, pages
-    try:
-        condensed = await llm.condense_resume(
-            req.job_description, tailored, target, f"At the tightest layout it currently runs to {pages} pages."
-        )
-    except llm.LLMError as exc:
-        log.warning("Condense step failed, returning the uncondensed resume: %s", exc)
-        return tailored, pages
-    condensed = enforce_invariants(req.resume, condensed, sections)
-    return condensed, await run_in_threadpool(export.page_count, condensed, req.page_target)
-
-
-def _key(name: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", name.lower())
-
-
-def enforce_invariants(original: Resume, tailored: Resume, sections: list[str]) -> Resume:
-    """Guard against the LLM touching things it must not change, regardless of what it returned."""
-    result = tailored.model_copy(deep=True)
-    # Identity, education and misc sections are never rewritten.
-    result.name, result.contact = original.name, original.contact
-    result.education, result.extra_sections = original.education, original.extra_sections
-    if not result.headline:
-        result.headline = original.headline
-
-    for section in ("summary", "skills", "experience", "projects"):
-        if section not in sections:
-            setattr(result, section, getattr(original, section))
-
-    # Role metadata must stay factual: restore titles/companies/dates when roles line up.
-    if "experience" in sections and len(result.experience) == len(original.experience):
-        for new, old in zip(result.experience, original.experience):
-            new.title, new.company, new.location, new.dates = old.title, old.company, old.location, old.dates
-    elif "experience" in sections:
-        result.experience = original.experience  # the model dropped or invented a role: fall back safely
-
-    # Projects may be reordered or (for page limits) dropped, but never invented or renamed,
-    # and their links always come from the original.
-    if "projects" in sections:
-        originals = {_key(p.name): p for p in original.projects}
-        kept = []
-        for proj in result.projects:
-            source = originals.get(_key(proj.name))
-            if source:
-                proj.name, proj.details, proj.url = source.name, source.details, source.url
-                kept.append(proj)
-        result.projects = kept if kept or not original.projects else original.projects
-    return result
+    return await service.tailor(req)
 
 
 @app.post("/api/cover-letter", dependencies=[Depends(rate_limit)])
@@ -229,24 +156,25 @@ async def cover_letter(req: CoverLetterRequest) -> StreamingResponse:
     return StreamingResponse(body(), media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
 
-MEDIA_TYPES = {
-    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "pdf": "application/pdf",
-}
-
-
 @app.post("/api/export/{fmt}")
 async def export_resume(fmt: str, req: ExportRequest) -> Response:
-    if fmt not in MEDIA_TYPES:
+    if fmt not in service.MEDIA_TYPES:
         raise HTTPException(404, "Supported export formats are pdf and docx.")
-    if fmt == "pdf":
-        result = await run_in_threadpool(export.to_pdf, req.resume, req.page_target)
-        content, pages = result.content, result.pages
-    else:
-        content = await run_in_threadpool(export.to_docx, req.resume, req.page_target)
-        pages = None
-    safe_name = re.sub(r"[^A-Za-z0-9]+", "_", req.resume.name).strip("_") or "resume"
-    headers = {"Content-Disposition": f'attachment; filename="{safe_name}_Resume.{fmt}"'}
+    content, pages = await service.render(req.resume, fmt, req.page_target)
+    headers = {"Content-Disposition": f'attachment; filename="{service.file_name(req.resume, fmt)}"'}
     if pages is not None:
         headers["X-Page-Count"] = str(pages)
-    return Response(content=content, media_type=MEDIA_TYPES[fmt], headers=headers)
+    return Response(content=content, media_type=service.MEDIA_TYPES[fmt], headers=headers)
+
+
+@app.get("/api/download/{token}")
+async def download(token: str) -> Response:
+    """Short-lived links handed out by the MCP export tools."""
+    stored = downloads.get(token)
+    if stored is None:
+        raise HTTPException(404, "This download link has expired. Ask your assistant to export the resume again.")
+    return Response(
+        content=stored.content,
+        media_type=stored.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{stored.filename}"'},
+    )
