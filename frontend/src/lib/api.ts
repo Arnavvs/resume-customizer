@@ -1,4 +1,4 @@
-import type { CoverLetterTone, Intensity, ParsedResume, Resume, Section, TailorResult } from "./types";
+import type { CoverLetterTone, Intensity, PageTarget, ParsedResume, Resume, Section, TailorResult } from "./types";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
@@ -47,6 +47,7 @@ export async function tailorResume(params: {
   parsed: ParsedResume;
   sections: Section[];
   intensity: Intensity;
+  pageTarget: PageTarget;
   jdKeywords?: string[];
 }): Promise<TailorResult> {
   const res = await request(
@@ -57,6 +58,7 @@ export async function tailorResume(params: {
       resume: params.parsed.resume,
       sections: params.sections,
       intensity: params.intensity,
+      page_target: params.pageTarget,
       jd_keywords: params.jdKeywords,
     }),
   );
@@ -86,8 +88,12 @@ export async function streamCoverLetter(
   }
 }
 
-export async function exportResume(resume: Resume, format: "pdf" | "docx"): Promise<{ blob: Blob; filename: string }> {
-  const res = await request(`/api/export/${format}`, json({ resume }));
+export async function exportResume(
+  resume: Resume,
+  format: "pdf" | "docx",
+  pageTarget: PageTarget,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await request(`/api/export/${format}`, json({ resume, page_target: pageTarget }));
   const disposition = res.headers.get("Content-Disposition") ?? "";
   const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `resume.${format}`;
   return { blob: await res.blob(), filename };

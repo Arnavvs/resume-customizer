@@ -43,32 +43,32 @@ def fake(monkeypatch):
 
 def test_overloaded_primary_falls_back_immediately(fake, sample_resume):
     models = fake({"primary": [api_error(503)], "backup": [sample_resume]})
-    result = asyncio.run(llm.structure_resume("text"))
+    result = asyncio.run(llm.structure_resume("text", []))
     assert result == sample_resume
     assert models.calls == ["primary", "backup"]
 
 
 def test_transient_error_retries_same_model(fake, sample_resume):
     models = fake({"primary": [api_error(500), sample_resume], "backup": []})
-    asyncio.run(llm.structure_resume("text"))
+    asyncio.run(llm.structure_resume("text", []))
     assert models.calls == ["primary", "primary"]
 
 
 def test_timeout_skips_to_next_model(fake, sample_resume):
     models = fake({"primary": [TimeoutError()], "backup": [sample_resume]})
-    asyncio.run(llm.structure_resume("text"))
+    asyncio.run(llm.structure_resume("text", []))
     assert models.calls == ["primary", "backup"]
 
 
 def test_bad_api_key_fails_fast_with_friendly_message(fake):
     models = fake({"primary": [api_error(403)], "backup": []})
     with pytest.raises(llm.LLMError, match="API key"):
-        asyncio.run(llm.structure_resume("text"))
+        asyncio.run(llm.structure_resume("text", []))
     assert models.calls == ["primary"]
 
 
 def test_all_models_exhausted(fake):
     fake({"primary": [api_error(429)], "backup": [api_error(429)]})
     with pytest.raises(llm.LLMError) as info:
-        asyncio.run(llm.structure_resume("text"))
+        asyncio.run(llm.structure_resume("text", []))
     assert info.value.status_code == 429

@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import export, llm, parsing, scoring
 from .config import get_settings
@@ -25,6 +26,7 @@ from .schemas import (
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger(__name__)
 settings = get_settings()
 
 app = FastAPI(title="Resume Customizer API", version="1.0.0")
@@ -34,7 +36,7 @@ app.add_middleware(
     allow_origin_regex=settings.allowed_origin_regex,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "X-Page-Count"],
 )
 
 
@@ -93,6 +95,7 @@ async def health() -> dict:
     return {"status": "ok", "model": settings.gemini_model, "llm_configured": bool(settings.gemini_api_key)}
 
 
+
 @app.post("/api/resume/parse", response_model=ParseResponse, dependencies=[Depends(rate_limit)])
 async def parse_resume(file: UploadFile = File(...)) -> ParseResponse:
     filename = file.filename or "resume"
@@ -106,19 +109,22 @@ async def parse_resume(file: UploadFile = File(...)) -> ParseResponse:
         raise HTTPException(400, "The uploaded file is empty.")
 
     try:
-        text = parsing.extract_text(filename, data)
+        extracted = parsing.extract(filename, data)
     except parsing.ResumeParseError as exc:
         raise HTTPException(422, str(exc)) from exc
 
-    resume = await llm.structure_resume(text)
-    return ParseResponse(filename=filename, size_bytes=len(data), text=text, resume=resume)
+    resume = await llm.structure_resume(extracted.text, extracted.links)
+    for item in resume.contact:  # emails, phones and bare domains become links even without a hyperlink
+        item.url = export.contact_url(item)
+    return ParseResponse(filename=filename, size_bytes=len(data), text=extracted.text, resume=resume)
 
 
 @app.post("/api/resume/tailor", response_model=TailorResponse, dependencies=[Depends(rate_limit)])
 async def tailor_resume(req: TailorRequest) -> TailorResponse:
     sections = list(dict.fromkeys(req.sections))
-    output = await llm.tailor_resume(req.job_description, req.resume, sections, req.intensity)
+    output = await llm.tailor_resume(req.job_description, req.resume, sections, req.intensity, req.page_target)
     tailored = enforce_invariants(req.resume, output.resume, sections)
+    tailored, pages = await fit_to_page_target(req, tailored, sections)
 
     keywords = req.jd_keywords or output.jd_keywords
     tailored_text = scoring.resume_to_text(tailored)
@@ -135,6 +141,8 @@ async def tailor_resume(req: TailorRequest) -> TailorResponse:
         change_log=output.change_log,
         sections=sections,
         intensity=req.intensity,
+        page_target=req.page_target,
+        page_count=pages,
         scores=Scores(
             match_before=match_before,
             match_after=match_after,
@@ -142,6 +150,28 @@ async def tailor_resume(req: TailorRequest) -> TailorResponse:
             ats_after=scoring.ats_report(tailored, match_after),
         ),
     )
+
+
+async def fit_to_page_target(req: TailorRequest, tailored: Resume, sections: list[str]) -> tuple[Resume, int]:
+    """Render the PDF; if it still overflows the requested page count even at the tightest layout,
+    ask the LLM once to condense by relevance. A failed condense keeps the longer version."""
+    pages = await run_in_threadpool(export.page_count, tailored, req.page_target)
+    target = export.PAGE_TARGETS.get(req.page_target)
+    if target is None or pages <= target:
+        return tailored, pages
+    try:
+        condensed = await llm.condense_resume(
+            req.job_description, tailored, target, f"At the tightest layout it currently runs to {pages} pages."
+        )
+    except llm.LLMError as exc:
+        log.warning("Condense step failed, returning the uncondensed resume: %s", exc)
+        return tailored, pages
+    condensed = enforce_invariants(req.resume, condensed, sections)
+    return condensed, await run_in_threadpool(export.page_count, condensed, req.page_target)
+
+
+def _key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
 def enforce_invariants(original: Resume, tailored: Resume, sections: list[str]) -> Resume:
@@ -163,6 +193,18 @@ def enforce_invariants(original: Resume, tailored: Resume, sections: list[str]) 
             new.title, new.company, new.location, new.dates = old.title, old.company, old.location, old.dates
     elif "experience" in sections:
         result.experience = original.experience  # the model dropped or invented a role: fall back safely
+
+    # Projects may be reordered or (for page limits) dropped, but never invented or renamed,
+    # and their links always come from the original.
+    if "projects" in sections:
+        originals = {_key(p.name): p for p in original.projects}
+        kept = []
+        for proj in result.projects:
+            source = originals.get(_key(proj.name))
+            if source:
+                proj.name, proj.details, proj.url = source.name, source.details, source.url
+                kept.append(proj)
+        result.projects = kept if kept or not original.projects else original.projects
     return result
 
 
@@ -187,20 +229,24 @@ async def cover_letter(req: CoverLetterRequest) -> StreamingResponse:
     return StreamingResponse(body(), media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
 
-EXPORTERS = {
-    "docx": (export.to_docx, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-    "pdf": (export.to_pdf, "application/pdf"),
+MEDIA_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
 }
 
 
 @app.post("/api/export/{fmt}")
 async def export_resume(fmt: str, req: ExportRequest) -> Response:
-    if fmt not in EXPORTERS:
+    if fmt not in MEDIA_TYPES:
         raise HTTPException(404, "Supported export formats are pdf and docx.")
-    render, media_type = EXPORTERS[fmt]
+    if fmt == "pdf":
+        result = await run_in_threadpool(export.to_pdf, req.resume, req.page_target)
+        content, pages = result.content, result.pages
+    else:
+        content = await run_in_threadpool(export.to_docx, req.resume, req.page_target)
+        pages = None
     safe_name = re.sub(r"[^A-Za-z0-9]+", "_", req.resume.name).strip("_") or "resume"
-    return Response(
-        content=render(req.resume),
-        media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}_Resume.{fmt}"'},
-    )
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name}_Resume.{fmt}"'}
+    if pages is not None:
+        headers["X-Page-Count"] = str(pages)
+    return Response(content=content, media_type=MEDIA_TYPES[fmt], headers=headers)

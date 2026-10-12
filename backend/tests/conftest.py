@@ -1,6 +1,6 @@
 import pytest
 
-from app.schemas import EducationItem, ExperienceItem, ExtraSection, ProjectItem, Resume, SkillGroup
+from app.schemas import ContactItem, EducationItem, ExperienceItem, ExtraSection, ProjectItem, Resume, SkillGroup
 
 
 @pytest.fixture
@@ -8,7 +8,12 @@ def sample_resume() -> Resume:
     return Resume(
         name="Priya Sharma",
         headline="Software Engineer",
-        contact=["priya@example.com", "+91 98765 43210", "linkedin.com/in/priya"],
+        contact=[
+            ContactItem(text="priya@example.com", url="mailto:priya@example.com"),
+            ContactItem(text="+91 98765 43210", url=""),
+            ContactItem(text="LinkedIn", url="https://linkedin.com/in/priya"),
+            ContactItem(text="Bengaluru", url=""),
+        ],
         summary="Software engineer with 3 years of experience building web applications and REST services.",
         skills=[
             SkillGroup(category="Languages", skills=["Python", "JavaScript", "SQL"]),
@@ -28,7 +33,14 @@ def sample_resume() -> Resume:
                 ],
             )
         ],
-        projects=[ProjectItem(name="Inventory Tracker", details="Django, PostgreSQL", bullets=["Built inventory app"])],
+        projects=[
+            ProjectItem(
+                name="Inventory Tracker",
+                details="Django, PostgreSQL",
+                url="https://github.com/priya/inventory",
+                bullets=["Built inventory app"],
+            )
+        ],
         education=[EducationItem(degree="B.Tech Computer Science", institution="IIT Delhi", dates="2017 – 2021", details="")],
         extra_sections=[ExtraSection(title="Certifications", items=["AWS Certified Cloud Practitioner"])],
     )

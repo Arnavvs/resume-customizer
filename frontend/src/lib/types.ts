@@ -16,6 +16,7 @@ export interface ExperienceItem {
 export interface ProjectItem {
   name: string;
   details: string;
+  url: string;
   bullets: string[];
 }
 
@@ -31,10 +32,15 @@ export interface ExtraSection {
   items: string[];
 }
 
+export interface ContactItem {
+  text: string;
+  url: string;
+}
+
 export interface Resume {
   name: string;
   headline: string;
-  contact: string[];
+  contact: ContactItem[];
   summary: string;
   skills: SkillGroup[];
   experience: ExperienceItem[];
@@ -52,6 +58,7 @@ export interface ParsedResume {
 
 export type Section = "summary" | "skills" | "experience" | "projects";
 export type Intensity = "conservative" | "balanced" | "bold";
+export type PageTarget = "auto" | "one" | "two";
 export type CoverLetterTone = "professional" | "enthusiastic" | "concise";
 
 export interface MissingKeyword {
@@ -88,6 +95,8 @@ export interface TailorResult {
   change_log: string[];
   sections: Section[];
   intensity: Intensity;
+  page_target: PageTarget;
+  page_count: number;
   scores: {
     match_before: KeywordMatch;
     match_after: KeywordMatch;

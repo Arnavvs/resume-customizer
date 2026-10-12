@@ -29,7 +29,8 @@ class ExperienceItem(BaseModel):
 
 class ProjectItem(BaseModel):
     name: str
-    details: str = Field(description="Secondary line such as tech stack, link or dates. Empty string if none.")
+    details: str = Field(description="Secondary line such as tech stack or dates (not the URL). Empty string if none.")
+    url: str = Field(description="Project link (repo, demo, paper) from the resume's hyperlinks. Empty string if none.")
     bullets: list[str]
 
 
@@ -45,10 +46,18 @@ class ExtraSection(BaseModel):
     items: list[str]
 
 
+class ContactItem(BaseModel):
+    text: str = Field(description="As displayed, e.g. 'jane@x.com', '+91 98100 12345', 'github.com/jane', 'LinkedIn'.")
+    url: str = Field(
+        description="Full link target: mailto:/tel:/https:// URL. Use the resume's hyperlink when the text is a "
+        "link label. Empty string for plain text such as a city."
+    )
+
+
 class Resume(BaseModel):
     name: str
     headline: str = Field(description="Professional title line under the name. Empty string if none.")
-    contact: list[str] = Field(description="Email, phone, location, profile URLs — one entry each.")
+    contact: list[ContactItem] = Field(description="Email, phone, location, profile links — one entry each.")
     summary: str = Field(description="Summary / objective paragraph. Empty string if none.")
     skills: list[SkillGroup]
     experience: list[ExperienceItem]
@@ -82,6 +91,7 @@ class TailorOutput(BaseModel):
 
 Section = Literal["summary", "skills", "experience", "projects"]
 Intensity = Literal["conservative", "balanced", "bold"]
+PageTarget = Literal["auto", "one", "two"]
 
 JD_MIN_CHARS = 100
 JD_MAX_CHARS = 20_000
@@ -100,6 +110,7 @@ class TailorRequest(BaseModel):
     resume: Resume
     sections: list[Section] = Field(default=["summary", "skills", "experience", "projects"], min_length=1)
     intensity: Intensity = "balanced"
+    page_target: PageTarget = "auto"
     # Keywords from an earlier version for the same JD, so scores stay comparable across versions.
     jd_keywords: list[str] | None = Field(default=None, max_length=40)
 
@@ -139,6 +150,8 @@ class TailorResponse(BaseModel):
     change_log: list[str]
     sections: list[Section]
     intensity: Intensity
+    page_target: PageTarget
+    page_count: int = Field(description="Pages the exported PDF takes.")
     scores: Scores
 
 
@@ -150,3 +163,4 @@ class CoverLetterRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     resume: Resume
+    page_target: PageTarget = "auto"

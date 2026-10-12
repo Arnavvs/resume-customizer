@@ -18,10 +18,10 @@ JD = (
 def client(monkeypatch, sample_resume):
     main._hits.clear()
 
-    async def fake_structure(text):
+    async def fake_structure(text, links):
         return sample_resume
 
-    async def fake_tailor(jd, resume, sections, intensity):
+    async def fake_tailor(jd, resume, sections, intensity, page_target="auto"):
         tailored = resume.model_copy(deep=True)
         tailored.summary = "Backend engineer building Python REST APIs with Flask, Docker and PostgreSQL."
         tailored.name = "Someone Else"  # must be reverted by the invariants guard

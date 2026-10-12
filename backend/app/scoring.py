@@ -7,7 +7,7 @@
 
 import re
 
-from .schemas import AtsReport, KeywordMatch, Resume, ScoreCheck
+from .schemas import AtsReport, ContactItem, KeywordMatch, Resume, ScoreCheck
 
 ACTION_VERBS = {
     "accelerated", "achieved", "analyzed", "analysed", "architected", "automated", "built", "championed",
@@ -32,13 +32,21 @@ _PHONE = re.compile(r"\+?\d[\d\s().-]{7,}\d")
 _NUMBER = re.compile(r"\d|%|\$|€|£|₹")
 
 
+def _contact_text(item: ContactItem) -> str:
+    """'GitHub (https://github.com/jane)' for labelled links; plain text otherwise."""
+    url = item.url
+    if not url or url.startswith(("mailto:", "tel:")) or url.split("://")[-1].rstrip("/") in item.text:
+        return item.text
+    return f"{item.text} ({url})"
+
+
 def resume_to_text(resume: Resume) -> str:
     """Plain-text rendering, used for keyword matching and the .txt download."""
     lines: list[str] = [resume.name]
     if resume.headline:
         lines.append(resume.headline)
     if resume.contact:
-        lines.append(" | ".join(resume.contact))
+        lines.append(" | ".join(_contact_text(c) for c in resume.contact))
     if resume.summary:
         lines += ["", "SUMMARY", resume.summary]
     if resume.skills:
@@ -54,7 +62,9 @@ def resume_to_text(resume: Resume) -> str:
     if resume.projects:
         lines += ["", "PROJECTS"]
         for proj in resume.projects:
-            lines.append(f"{proj.name}{f' — {proj.details}' if proj.details else ''}")
+            lines.append(
+                f"{proj.name}{f' — {proj.details}' if proj.details else ''}{f' ({proj.url})' if proj.url else ''}"
+            )
             lines += [f"• {b}" for b in proj.bullets]
     if resume.education:
         lines += ["", "EDUCATION"]
@@ -131,7 +141,7 @@ def _check(label: str, max_points: float, ratio: float, detail: str) -> ScoreChe
 
 
 def ats_report(resume: Resume, match: KeywordMatch) -> AtsReport:
-    contact = " ".join(resume.contact)
+    contact = " ".join(f"{c.text} {c.url}" for c in resume.contact)
     bullets = [b for job in resume.experience for b in job.bullets] + [b for p in resume.projects for b in p.bullets]
     n_bullets = len(bullets) or 1
     skills = [s for g in resume.skills for s in g.skills]

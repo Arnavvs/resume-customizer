@@ -27,6 +27,7 @@ from pydantic import BaseModel, ValidationError
 
 from . import prompts
 from .config import get_settings
+from .parsing import Link
 from .schemas import Resume, TailorOutput
 
 log = logging.getLogger(__name__)
@@ -137,10 +138,10 @@ async def _generate_structured(
     raise _friendly_error(last_exc)
 
 
-async def structure_resume(resume_text: str) -> Resume:
+async def structure_resume(resume_text: str, links: list[Link]) -> Resume:
     return await _generate_structured(
         prompts.PARSE_SYSTEM,
-        prompts.parse_user_prompt(resume_text),
+        prompts.parse_user_prompt(resume_text, links),
         Resume,
         temperature=0.0,
         timeout=PARSE_TIMEOUT,
@@ -151,12 +152,25 @@ async def structure_resume(resume_text: str) -> Resume:
 INTENSITY_TEMPERATURE = {"conservative": 0.2, "balanced": 0.4, "bold": 0.7}
 
 
-async def tailor_resume(job_description: str, resume: Resume, sections: list[str], intensity: str) -> TailorOutput:
+async def tailor_resume(
+    job_description: str, resume: Resume, sections: list[str], intensity: str, page_target: str = "auto"
+) -> TailorOutput:
     return await _generate_structured(
         prompts.TAILOR_SYSTEM,
-        prompts.tailor_user_prompt(job_description, resume, sections, intensity),
+        prompts.tailor_user_prompt(job_description, resume, sections, intensity, page_target),
         TailorOutput,
         temperature=INTENSITY_TEMPERATURE[intensity],
+        timeout=TAILOR_TIMEOUT,
+        thinking_budget=1024,
+    )
+
+
+async def condense_resume(job_description: str, resume: Resume, target_pages: int, overflow: str) -> Resume:
+    return await _generate_structured(
+        prompts.CONDENSE_SYSTEM,
+        prompts.condense_user_prompt(job_description, resume, target_pages, overflow),
+        Resume,
+        temperature=0.3,
         timeout=TAILOR_TIMEOUT,
         thinking_budget=1024,
     )

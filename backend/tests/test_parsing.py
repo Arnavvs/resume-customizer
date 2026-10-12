@@ -37,7 +37,7 @@ def test_docx_text_includes_paragraphs_and_tables():
 
 
 def test_pdf_round_trip(sample_resume):
-    text = parsing.extract_text("cv.pdf", export.to_pdf(sample_resume))
+    text = parsing.extract_text("cv.pdf", export.to_pdf(sample_resume).content)
     assert "Priya Sharma" in text
     assert "Acme Corp" in text
 

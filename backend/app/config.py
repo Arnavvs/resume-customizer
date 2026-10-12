@@ -13,13 +13,17 @@ def _csv(value: str) -> list[str]:
     return [item.strip().rstrip("/") for item in value.split(",") if item.strip()]
 
 
+DEFAULT_FALLBACKS = "gemini-3.8-flash,gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+
+
 @dataclass(frozen=True)
 class Settings:
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.5-flash"))
-    # Tried in order when the primary model is overloaded or rate-limited.
+    # Tried in order when the primary model is overloaded or rate-limited. Free-tier quotas are per
+    # model (e.g. 20 requests/day for 3.x Flash), so a longer chain also means more daily capacity.
     gemini_fallback_models: list[str] = field(
-        default_factory=lambda: _csv(os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.8-flash,gemini-2.5-flash"))
+        default_factory=lambda: _csv(os.getenv("GEMINI_FALLBACK_MODELS", DEFAULT_FALLBACKS))
     )
     llm_timeout_seconds: int = field(default_factory=lambda: int(os.getenv("LLM_TIMEOUT_SECONDS", "120")))
     allowed_origins: list[str] = field(

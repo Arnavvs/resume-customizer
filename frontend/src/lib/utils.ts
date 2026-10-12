@@ -1,4 +1,4 @@
-import type { Resume } from "./types";
+import type { ContactItem, Resume } from "./types";
 
 export function cn(...classes: (string | false | null | undefined)[]): string {
   return classes.filter(Boolean).join(" ");
@@ -25,11 +25,18 @@ export function safeFileName(name: string): string {
   return name.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "") || "resume";
 }
 
+/** "GitHub (https://github.com/x)" for labelled links, plain text otherwise. */
+function contactText(c: ContactItem): string {
+  const bare = c.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  if (!c.url || c.url.startsWith("mailto:") || c.url.startsWith("tel:") || c.text.includes(bare)) return c.text;
+  return `${c.text} (${c.url})`;
+}
+
 /** Plain-text rendering of a resume (same layout as the backend's resume_to_text). */
 export function resumeToText(r: Resume): string {
   const lines: string[] = [r.name];
   if (r.headline) lines.push(r.headline);
-  if (r.contact.length) lines.push(r.contact.join(" | "));
+  if (r.contact.length) lines.push(r.contact.map(contactText).join(" | "));
   if (r.summary) lines.push("", "SUMMARY", r.summary);
   if (r.skills.length) {
     lines.push("", "SKILLS");
@@ -46,7 +53,7 @@ export function resumeToText(r: Resume): string {
   if (r.projects.length) {
     lines.push("", "PROJECTS");
     r.projects.forEach((p) => {
-      lines.push(`${p.name}${p.details ? ` — ${p.details}` : ""}`);
+      lines.push(`${p.name}${p.details ? ` — ${p.details}` : ""}${p.url ? ` (${p.url})` : ""}`);
       p.bullets.forEach((b) => lines.push(`• ${b}`));
     });
   }

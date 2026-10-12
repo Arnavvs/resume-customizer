@@ -1,6 +1,6 @@
 "use client";
 
-import { Briefcase, FileSearch, GitCompare, Loader2, PenLine, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { Briefcase, FileSearch, FileText, GitCompare, Loader2, PenLine, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CompareView } from "@/components/CompareView";
 import { CoverLetter } from "@/components/CoverLetter";
@@ -13,7 +13,7 @@ import { ResumeView } from "@/components/ResumeView";
 import { ALL_SECTIONS, TailorOptions } from "@/components/TailorOptions";
 import { Button, Card, Chip, ErrorMessage } from "@/components/ui";
 import { ApiError, parseResume, tailorResume } from "@/lib/api";
-import type { Intensity, ParsedResume, ResumeVersion, Section } from "@/lib/types";
+import type { Intensity, PageTarget, ParsedResume, ResumeVersion, Section } from "@/lib/types";
 import { cn, storage } from "@/lib/utils";
 
 type Tab = "resume" | "changes" | "insights" | "cover" | "compare";
@@ -34,7 +34,8 @@ const PROGRESS_STEPS = [
   "Scoring the result…",
 ];
 
-const STORAGE_KEY = "resume-customizer:v1";
+// v2: contact items became {text, url} objects, so older saved sessions are not reused.
+const STORAGE_KEY = "resume-customizer:v2";
 
 interface Persisted {
   jd: string;
@@ -45,13 +46,14 @@ interface Persisted {
 }
 
 const INTENSITY_LABEL: Record<Intensity, string> = { conservative: "Light", balanced: "Balanced", bold: "Bold" };
+const PAGE_LABEL: Record<PageTarget, string> = { one: "1 page", two: "2 pages", auto: "auto length" };
 
-function versionLabel(n: number, intensity: Intensity, sections: Section[]) {
+function versionLabel(n: number, intensity: Intensity, sections: Section[], pageTarget: PageTarget) {
   const scope =
     sections.length === ALL_SECTIONS.length
-      ? "all sections"
-      : sections.map((s) => ALL_SECTIONS.find((a) => a.id === s)?.label).join(", ");
-  return `v${n} · ${INTENSITY_LABEL[intensity]} · ${scope}`;
+      ? ""
+      : ` · ${sections.map((s) => ALL_SECTIONS.find((a) => a.id === s)?.label).join(", ")}`;
+  return `v${n} · ${INTENSITY_LABEL[intensity]} · ${PAGE_LABEL[pageTarget]}${scope}`;
 }
 
 export default function Home() {
@@ -63,6 +65,7 @@ export default function Home() {
 
   const [sections, setSections] = useState<Section[]>(ALL_SECTIONS.map((s) => s.id));
   const [intensity, setIntensity] = useState<Intensity>("balanced");
+  const [pageTarget, setPageTarget] = useState<PageTarget>("one");
 
   const [versions, setVersions] = useState<ResumeVersion[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -173,12 +176,13 @@ export default function Home() {
         parsed,
         sections,
         intensity,
+        pageTarget,
         jdKeywords: sameJd?.jd_keywords,
       });
       const version: ResumeVersion = {
         ...result,
         id: crypto.randomUUID(),
-        label: versionLabel(versions.length + 1, intensity, result.sections),
+        label: versionLabel(versions.length + 1, intensity, result.sections, result.page_target),
         createdAt: Date.now(),
         jobDescription,
       };
@@ -243,6 +247,8 @@ export default function Home() {
               onSectionsChange={setSections}
               intensity={intensity}
               onIntensityChange={setIntensity}
+              pageTarget={pageTarget}
+              onPageTargetChange={setPageTarget}
             />
             <div className="space-y-2">
               <Button
@@ -270,9 +276,23 @@ export default function Home() {
                 <div className="min-w-0">
                   <p className="text-xs font-medium uppercase tracking-wider text-indigo-600">Tailored for</p>
                   <h1 className="truncate text-xl font-semibold tracking-tight text-slate-900">{active.target_role}</h1>
+                  {active.page_count > 0 && (
+                    <p
+                      className={cn(
+                        "mt-1 inline-flex items-center gap-1.5 text-xs font-medium",
+                        active.page_target !== "auto" && active.page_count > (active.page_target === "one" ? 1 : 2)
+                          ? "text-amber-700"
+                          : "text-emerald-700",
+                      )}
+                    >
+                      <FileText className="size-3.5" aria-hidden />
+                      PDF is {active.page_count} page{active.page_count > 1 ? "s" : ""}
+                      {active.page_target === "one" && active.page_count > 1 && " — try Bold intensity or fewer sections to fit one page"}
+                    </p>
+                  )}
                 </div>
                 <div className="no-print">
-                  <DownloadMenu resume={active.resume} onError={setError} />
+                  <DownloadMenu resume={active.resume} pageTarget={active.page_target ?? "auto"} onError={setError} />
                 </div>
               </div>
 

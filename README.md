@@ -17,9 +17,10 @@ Paste a job description, upload your resume (PDF or DOCX), and get back a versio
 | --- | --- |
 | JD input + validation | Textarea with live character count. Must be non-empty, ≥ 100 and ≤ 20,000 characters. Enforced on both client and server. |
 | Resume upload | Drag & drop or browse. PDF and DOCX. Shows the file name and size. Type, size (5 MB) and empty-file checks run on both client and server, plus magic-byte validation on the server. |
-| Parsing | `pdfplumber` (PDF) and `python-docx` (DOCX, including tables and headers). The text is then structured into sections by the LLM. |
+| Parsing | `pdfplumber` (PDF) and `python-docx` (DOCX, including tables and headers). The text is then structured into sections by the LLM. **Hyperlinks are extracted too** (PDF link annotations, DOCX hyperlink relationships), so a "GitHub" or "LinkedIn" label keeps its real URL. |
 | LLM customization | Rewrites the summary, reorders and rephrases bullets, highlights matching skills and suggests missing keywords. Uses Gemini structured JSON output. |
-| Output + download | Rendered resume with JD keywords highlighted. Download as **PDF** or **DOCX** (generated server-side, ATS-friendly single column) or **TXT**. |
+| Output + download | Rendered resume with JD keywords highlighted. Download as **PDF** or **DOCX** (generated server-side, ATS-friendly single column, embedded Lato font, clickable contact and project links) or **TXT**. The on-screen preview uses the same typography as the PDF. |
+| Resume length | Choose **1 page**, **2 pages** or **Auto**. The prompt budgets content for the target. The PDF renderer then fits the layout (slightly tighter type and spacing, never below ~8.5 pt). If it still overflows, one extra LLM pass condenses by JD relevance. The UI shows the resulting page count. |
 | Error handling | Friendly messages for bad file type/size, empty input, corrupted or scanned PDFs, LLM rate limits/overload/timeouts, and the backend being unreachable. |
 
 **Bonus features implemented**
@@ -42,11 +43,11 @@ Paste a job description, upload your resume (PDF or DOCX), and get back a versio
 | Backend | Python 3.12, FastAPI, Pydantic v2, pdfplumber, python-docx, fpdf2 |
 | LLM | Google Gemini via the official `google-genai` SDK |
 | Hosting | Vercel (frontend), Render (backend, Docker) |
-| Tests | pytest (backend: parsing, scoring, API, LLM fallback; 34 tests) |
+| Tests | pytest (backend: parsing, link extraction, export/fit-to-page, scoring, API, LLM fallback; 48 tests) |
 
 ### LLM provider and model
 
-**Google Gemini (Google AI Studio API).** The primary model is **`gemini-3.5-flash`**, with automatic fallback to **`gemini-3.8-flash`** and then **`gemini-2.5-flash`**. All three are configurable with environment variables.
+**Google Gemini (Google AI Studio API).** The primary model is **`gemini-3.5-flash`**. It falls back automatically to **`gemini-3.8-flash`**, then **`gemini-2.5-flash`**, **`gemini-3.5-flash-lite`** and **`gemini-3.1-flash-lite`**. The whole chain is configurable with environment variables. Free-tier quotas are per model (only 20 requests/day for the 3.x Flash models), so the longer chain also multiplies the app's daily capacity.
 
 Why Flash models with **low thinking**: tailoring is a structured rewrite task, not deep reasoning. With the default thinking setting, tailoring took 25–55 s. With thinking set to `low` (3.x) or a small token budget (2.x), it takes about 8–15 s with the same output quality, and parsing takes 3–7 s. The fallback chain exists because free-tier models regularly return `503 overloaded`. When that happens, the request moves to the next model instead of failing. Each attempt also has its own timeout, so a hung model costs seconds, not minutes. `gemini-2.5-flash` is last in the chain because, in testing, it followed the no-invented-outcomes rule less reliably than the 3.x models.
 
@@ -156,7 +157,7 @@ Open http://localhost:3000.
 | --- | --- | --- | --- |
 | `GEMINI_API_KEY` | backend | – | **Required.** Google AI Studio key |
 | `GEMINI_MODEL` | backend | `gemini-3.5-flash` | Primary model |
-| `GEMINI_FALLBACK_MODELS` | backend | `gemini-3.8-flash,gemini-2.5-flash` | Tried in order on 429/503 |
+| `GEMINI_FALLBACK_MODELS` | backend | `gemini-3.8-flash,gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite` | Tried in order on 429/503/504/timeouts |
 | `ALLOWED_ORIGINS` | backend | `http://localhost:3000` | CORS allow-list (comma-separated) |
 | `ALLOWED_ORIGIN_REGEX` | backend | – | Optional, e.g. for Vercel preview URLs |
 | `MAX_UPLOAD_MB` | backend | `5` | Upload size limit |
@@ -175,7 +176,9 @@ Open http://localhost:3000.
 - **The parse step uses an LLM call.** This is slower than pure heuristics (~5–10 s), but it handles the wide variety of resume layouts (multi-column, tables) far better. It also gives the structure that powers the diff and section-wise editing.
 - **Keyword match is literal** (with normalisation for plurals, `.js`, `CI/CD`, acronyms in parentheses, etc.). It won't credit synonyms. That is intentional, because it mirrors how many ATS systems match, and the number stays reproducible rather than LLM-estimated.
 - **The ATS score is a heuristic checklist**, not a replica of any vendor's ATS. Every point is explained in the UI.
-- **PDF export uses built-in Latin-1 fonts** (fpdf2 core fonts), so non-Latin scripts (e.g. Devanagari, CJK) are stripped from the PDF. DOCX and TXT exports keep full Unicode. A bundled Unicode TTF would fix this at the cost of image size.
+- **PDF font coverage:** the PDF embeds Lato (OFL licence, bundled in `backend/app/fonts`), which covers Latin scripts. Resumes in Devanagari or CJK would need an extra font such as Noto. DOCX and TXT exports use system fonts and keep full Unicode.
+- **One page isn't always possible.** If the content still overflows after layout fitting and the condense pass, the app returns the closest result and says how many pages it is, rather than silently cutting more.
+- **Free-tier LLM quota:** the 3.x Flash models allow 20 requests/day each on a free key. Once they're used up, requests fall through to `gemini-2.5-flash` and the Flash-Lite models, which follow the "no unstated claims" rules a little less strictly. A paid key removes this.
 - **No authentication or server-side history.** Versions and cover letters persist in the browser (localStorage) instead. That keeps the backend stateless and free of PII, but history doesn't follow you across devices.
 - **The rate limiter is in-memory** and per instance. That's fine for a single free-tier instance; Redis would be needed at scale.
 - **Free-tier cold starts:** Render's free plan sleeps when idle, so the first request after a while can take ~30–50 s. The UI explains this if the server can't be reached.

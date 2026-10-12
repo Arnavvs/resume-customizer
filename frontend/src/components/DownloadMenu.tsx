@@ -3,13 +3,21 @@
 import { Download, FileText, FileType2, FileCode2 } from "lucide-react";
 import { useState } from "react";
 import { ApiError, exportResume } from "@/lib/api";
-import type { Resume } from "@/lib/types";
+import type { PageTarget, Resume } from "@/lib/types";
 import { downloadBlob, resumeToText, safeFileName } from "@/lib/utils";
 import { Button } from "./ui";
 
 type Format = "pdf" | "docx" | "txt";
 
-export function DownloadMenu({ resume, onError }: { resume: Resume; onError: (msg: string) => void }) {
+export function DownloadMenu({
+  resume,
+  pageTarget,
+  onError,
+}: {
+  resume: Resume;
+  pageTarget: PageTarget;
+  onError: (msg: string) => void;
+}) {
   const [busy, setBusy] = useState<Format | null>(null);
 
   const download = async (format: Format) => {
@@ -20,7 +28,7 @@ export function DownloadMenu({ resume, onError }: { resume: Resume; onError: (ms
     }
     setBusy(format);
     try {
-      const { blob, filename } = await exportResume(resume, format);
+      const { blob, filename } = await exportResume(resume, format, pageTarget);
       downloadBlob(blob, filename);
     } catch (e) {
       onError(e instanceof ApiError ? e.message : "Download failed. Please try again.");
