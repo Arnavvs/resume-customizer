@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background: #f6f7fb;
+  color: #0f172a;
+}
+
+/* Diff highlighting */
+.diff-add {
+  background: #dcfce7;
+  color: #14532d;
+  border-radius: 3px;
+  text-decoration: none;
+}
+.diff-del {
+  background: #fee2e2;
+  color: #7f1d1d;
+  border-radius: 3px;
+  text-decoration: line-through;
+  text-decoration-color: #f87171;
+}
+
+/* Blinking caret shown while the cover letter streams in */
+.stream-caret::after {
+  content: "▍";
+  margin-left: 1px;
+  animation: blink 1s steps(2) infinite;
+  color: #6366f1;
+}
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media print {
+  body {
+    background: white;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

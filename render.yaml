@@ -1,0 +1,20 @@
+# Render Blueprint for the FastAPI backend (https://render.com/docs/blueprint-spec)
+services:
+  - type: web
+    name: resume-customizer-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false # set in the Render dashboard
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash
+      - key: GEMINI_FALLBACK_MODELS
+        value: gemini-3.8-flash,gemini-2.5-flash
+      - key: ALLOWED_ORIGINS
+        sync: false # e.g. https://your-app.vercel.app
+      - key: ALLOWED_ORIGIN_REGEX
+        sync: false
